@@ -27,3 +27,7 @@ Sending before fsync breaks safety; `Config.SkipSync` exists to prove the checke
 ## Milestones
 M1 harness (done) | M2 election | M3 replication + Figure 8 | M4 persistence + crash fuzz |
 M5 PreVote, CheckQuorum, client dedupe | M6 KV + Porcupine | M7 visualizer (consumes `Sim.TraceLog`)
+
+## Implementation Limits
+* **Linearizability**: M6 sends reads through the Raft log, which proves linearizable reads and writes. It does not implement or test fast leader-local reads (`ReadIndex`), which would be the next step for read scaling.
+* **Livelock & Disruption**: PreVote is implemented, but there is no strict leader lease mechanism. A healthy cluster can still be disrupted in rare timings, though the `CheckQuorum` isolation defense heavily mitigates this risk.
