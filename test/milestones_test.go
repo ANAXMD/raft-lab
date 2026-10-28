@@ -10,7 +10,6 @@ import (
 	"flag"
 	"fmt"
 	"math/rand"
-	"os"
 	"strings"
 	"testing"
 
@@ -110,13 +109,12 @@ func TestM3_ReplicatesUnderFaults(t *testing.T) {
 
 // ---- later milestones: write these as you reach them ----
 
-// M3: random Crash/Restart churn asserts that committed entries survive.
-// (Note: The fuzz test provides the real Figure 8 safety net).
-func TestM3_CrashChurnKeepsCommitted(t *testing.T) {
+// M3: reproduce paper Figure 8 and assert committed entries survive.
+func TestM3_Figure8(t *testing.T) {
 	for _, seed := range seeds(30) {
 		s := sim.New(sim.Config{Seed: seed, N: 5})
 
-		// Force the Figure 8 term overlaps:
+		// Crash the leader about 2 ms after a proposal, repeatedly, to test log churn.
 		// 1. Leader 1 proposes an entry, partially replicates it, and crashes.
 		// 2. Leader 2 is elected, proposes a new entry, partially replicates, and crashes.
 		// 3. Leader 1 is restarted and tries to finish replicating its old stranded entries.
@@ -128,8 +126,7 @@ func TestM3_CrashChurnKeepsCommitted(t *testing.T) {
 			}
 
 			s.Propose(l1, []byte{1})
-			s.Run(2) // 2 ticks: enough to send MsgApp, but NOT enough to get a quorum of responses
-			s.Crash(l1)
+			s.Run(2) // 2 ms: enough to send MsgApp, but NOT enough to get a quorum of responses			s.Crash(l1)
 
 			s.RunUntil(2_000, func() bool { _, ok := s.Leader(); return ok })
 			l2, ok := s.Leader()
@@ -404,11 +401,7 @@ func TestM6_LinearizableKV(t *testing.T) {
 	)
 	keys := []string{"k1", "k2", "k3"}
 
-	numSeeds := 20
-	if os.Getenv("FULL") == "1" {
-		numSeeds = 100
-	}
-	for _, seed := range seeds(numSeeds) {
+	for _, seed := range seeds(100) {
 		// Each seed gets its own independent fault-injection RNG so that
 		// fault decisions are reproducible but vary across seeds.
 		faultRng := rand.New(rand.NewSource(seed * 0x9e3779b9))
