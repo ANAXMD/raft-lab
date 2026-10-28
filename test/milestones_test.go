@@ -109,8 +109,8 @@ func TestM3_ReplicatesUnderFaults(t *testing.T) {
 
 // ---- later milestones: write these as you reach them ----
 
-// M3: reproduce paper Figure 8 and assert committed entries survive.
-func TestM3_Figure8(t *testing.T) {
+// M3: reproduce paper CrashChurnKeepsCommitted and assert committed entries survive.
+func TestM3_CrashChurnKeepsCommitted(t *testing.T) {
 	for _, seed := range seeds(30) {
 		s := sim.New(sim.Config{Seed: seed, N: 5})
 
@@ -126,7 +126,8 @@ func TestM3_Figure8(t *testing.T) {
 			}
 
 			s.Propose(l1, []byte{1})
-			s.Run(2) // 2 ms: enough to send MsgApp, but NOT enough to get a quorum of responses			s.Crash(l1)
+			s.Run(2) // 2 ms: enough to send MsgApp, but NOT enough to get a quorum of responses
+			s.Crash(l1)
 
 			s.RunUntil(2_000, func() bool { _, ok := s.Leader(); return ok })
 			l2, ok := s.Leader()
@@ -148,7 +149,7 @@ func TestM3_Figure8(t *testing.T) {
 		s.Heal()
 		s.Run(5_000)
 
-		// If your Figure 8 commit rule (in advanceCommit) or the No-Op entry fix is missing,
+		// If your CrashChurnKeepsCommitted commit rule (in advanceCommit) or the No-Op entry fix is missing,
 		// the simulator's safety checker will panic right here because a committed entry was lost.
 		s.MustBeSafe(t)
 	}

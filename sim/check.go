@@ -19,6 +19,11 @@ func (s *Sim) violate(format string, args ...any) {
 	msg := fmt.Sprintf("[seed=%d t=%dms] ", s.cfg.Seed, s.now) + fmt.Sprintf(format, args...)
 	s.violations = append(s.violations, msg)
 	s.logf("VIOLATION %s", msg)
+	s.emit(Event{
+		T:   s.Now(),
+		Ev:  "violation",
+		Msg: msg,
+	})
 }
 
 // Violations returns every safety violation observed so far.

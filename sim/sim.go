@@ -40,6 +40,7 @@ type Config struct {
 	// start failing when this is on. That proves the harness has teeth.
 	SkipSync bool
 	NewNode  NodeFactory
+	OnEvent  func(Event) // Optional hook to stream structured trace events
 }
 
 func (c *Config) defaults() {
@@ -63,13 +64,23 @@ func (c *Config) defaults() {
 	}
 }
 
+type nodeSnap struct {
+	term   raft.Term
+	role   raft.Role
+	commit raft.Index
+	last   raft.Index
+	up     bool
+	init   bool
+}
+
 type host struct {
-	id      raft.NodeID
-	node    raft.Node
-	disk    *Disk
-	up      bool
-	applied []raft.Entry // this host's volatile state machine input
-	rng     *rand.Rand
+	id       raft.NodeID
+	node     raft.Node
+	disk     *Disk
+	up       bool
+	applied  []raft.Entry // this host's volatile state machine input
+	rng      *rand.Rand
+	lastSnap nodeSnap
 }
 
 type event struct {
@@ -98,11 +109,13 @@ func (h *eventHeap) Pop() any {
 type link struct{ from, to raft.NodeID }
 
 type Sim struct {
-	cfg   Config
-	rng   *rand.Rand
-	now   int64
-	seq   uint64
-	queue eventHeap
+	cfg       Config
+	onEvent   func(Event)
+	nextMsgID int
+	rng       *rand.Rand
+	now       int64
+	seq       uint64
+	queue     eventHeap
 
 	ids   []raft.NodeID // sorted; ALWAYS iterate this, never the map
 	hosts map[raft.NodeID]*host
@@ -135,6 +148,7 @@ func New(cfg Config) *Sim {
 	cfg.defaults()
 	s := &Sim{
 		cfg:          cfg,
+		onEvent:      cfg.OnEvent,
 		rng:          rand.New(rand.NewSource(cfg.Seed)),
 		hosts:        map[raft.NodeID]*host{},
 		cut:          map[link]bool{},
@@ -147,6 +161,7 @@ func New(cfg Config) *Sim {
 		h := &host{id: id, disk: &Disk{}, rng: rand.New(rand.NewSource(s.rng.Int63()))}
 		s.hosts[id] = h
 		s.boot(h)
+		s.checkNode(h)
 		// Stagger tick phases deterministically so nodes aren't in lock-step.
 		s.scheduleTick(h, 1+s.rng.Int63n(cfg.TickMs))
 	}
@@ -180,9 +195,47 @@ func (s *Sim) scheduleTick(h *host, delay int64) {
 			h.node.Tick()
 			s.pump(h)
 			s.check()
+			s.checkNode(h)
 		}
 		s.scheduleTick(h, s.cfg.TickMs)
 	})
+}
+
+func (s *Sim) emit(e Event) {
+	if s.onEvent != nil {
+		s.onEvent(e)
+	}
+}
+
+func (s *Sim) checkNode(h *host) {
+	if s.onEvent == nil {
+		return
+	}
+	var st raft.Status
+	if h.node != nil {
+		st = h.node.Status()
+	}
+	snap := nodeSnap{
+		term:   st.Term,
+		role:   st.Role,
+		commit: st.Commit,
+		last:   st.LastIndex,
+		up:     h.up,
+		init:   true,
+	}
+	if snap != h.lastSnap {
+		h.lastSnap = snap
+		s.emit(Event{
+			T:      s.Now(),
+			Ev:     "node",
+			From:   h.id,
+			Role:   st.Role,
+			Term:   st.Term,
+			Commit: st.Commit,
+			Last:   st.LastIndex,
+			Up:     h.up,
+		})
+	}
 }
 
 // Now returns virtual time in ms.
@@ -230,6 +283,15 @@ func (s *Sim) pump(h *host) {
 			if !s.cfg.SkipSync {
 				h.disk.Sync() // durable BEFORE any message leaves
 			}
+			if len(rd.Entries) > 0 {
+				s.emit(Event{
+					T:       s.Now(),
+					Ev:      "log",
+					From:    h.id,
+					Idx:     rd.Entries[0].Index,
+					Entries: rd.Entries,
+				})
+			}
 		}
 		for _, m := range rd.Messages {
 			s.send(m)
@@ -238,6 +300,7 @@ func (s *Sim) pump(h *host) {
 			s.apply(h, e)
 		}
 		h.node.Advance()
+		s.checkNode(h)
 	}
 }
 
@@ -245,6 +308,19 @@ func (s *Sim) pump(h *host) {
 
 func (s *Sim) send(m raft.Message) {
 	s.logf("send %v %d->%d term=%d", m.Type, m.From, m.To, m.Term)
+	s.nextMsgID++
+	msgID := s.nextMsgID
+	s.emit(Event{
+		T:    s.Now(),
+		Ev:   "send",
+		ID:   msgID,
+		From: m.From,
+		To:   m.To,
+		Type: m.Type.String(),
+		Term: m.Term,
+		N:    len(m.Entries),
+	})
+
 	// RNG draws happen in a fixed order so runs stay reproducible.
 	drop := s.rng.Float64() < s.cfg.DropProb
 	delay := s.cfg.MinDelayMs + s.rng.Int63n(s.cfg.MaxDelayMs-s.cfg.MinDelayMs+1)
@@ -252,28 +328,68 @@ func (s *Sim) send(m raft.Message) {
 	dupDelay := s.cfg.MinDelayMs + s.rng.Int63n(s.cfg.MaxDelayMs-s.cfg.MinDelayMs+1)
 	if drop {
 		s.logf("drop %v %d->%d", m.Type, m.From, m.To)
+		s.emit(Event{
+			T:    s.Now(),
+			Ev:   "drop",
+			ID:   msgID,
+			From: m.From,
+			To:   m.To,
+			Type: m.Type.String(),
+			Term: m.Term,
+			Why:  "loss",
+		})
 		return
 	}
-	s.at(delay, func() { s.deliver(m) })
+	s.at(delay, func() { s.deliver(m, msgID) })
 	if dup {
-		s.at(dupDelay, func() { s.deliver(m) })
+		s.at(dupDelay, func() { s.deliver(m, msgID) })
 	}
 }
 
-func (s *Sim) deliver(m raft.Message) {
+func (s *Sim) deliver(m raft.Message, msgID int) {
 	h, ok := s.hosts[m.To]
 	if !ok || !h.up {
 		s.logf("lost(down) %v %d->%d", m.Type, m.From, m.To)
+		s.emit(Event{
+			T:    s.Now(),
+			Ev:   "drop",
+			ID:   msgID,
+			From: m.From,
+			To:   m.To,
+			Type: m.Type.String(),
+			Term: m.Term,
+			Why:  "down",
+		})
 		return
 	}
 	if s.cut[link{m.From, m.To}] {
 		s.logf("lost(partition) %v %d->%d", m.Type, m.From, m.To)
+		s.emit(Event{
+			T:    s.Now(),
+			Ev:   "drop",
+			ID:   msgID,
+			From: m.From,
+			To:   m.To,
+			Type: m.Type.String(),
+			Term: m.Term,
+			Why:  "partition",
+		})
 		return
 	}
 	s.logf("deliver %v %d->%d term=%d", m.Type, m.From, m.To, m.Term)
+	s.emit(Event{
+		T:    s.Now(),
+		Ev:   "deliver",
+		ID:   msgID,
+		From: m.From,
+		To:   m.To,
+		Type: m.Type.String(),
+		Term: m.Term,
+	})
 	h.node.Step(m)
 	s.pump(h)
 	s.check()
+	s.checkNode(h)
 }
 
 // ---------- fault injection ----------
@@ -288,6 +404,12 @@ func (s *Sim) Isolate(id raft.NodeID) {
 			s.Cut(id, o)
 		}
 	}
+	s.emit(Event{
+		T:    s.Now(),
+		Ev:   "fault",
+		From: id,
+		Why:  "isolate",
+	})
 }
 
 // Partition splits the cluster into groups that can only talk within a group.
@@ -306,10 +428,22 @@ func (s *Sim) Partition(groups ...[]raft.NodeID) {
 			}
 		}
 	}
+	s.emit(Event{
+		T:   s.Now(),
+		Ev:  "fault",
+		Why: "partition",
+	})
 }
 
 // Heal removes every partition.
-func (s *Sim) Heal() { s.cut = map[link]bool{} }
+func (s *Sim) Heal() {
+	s.cut = map[link]bool{}
+	s.emit(Event{
+		T:   s.Now(),
+		Ev:  "fault",
+		Why: "heal",
+	})
+}
 
 // Crash power-cuts a node: unsynced disk writes are lost, volatile state vanishes.
 func (s *Sim) Crash(id raft.NodeID) {
@@ -317,6 +451,13 @@ func (s *Sim) Crash(id raft.NodeID) {
 	s.logf("CRASH %d", id)
 	h.up = false
 	h.disk.Crash()
+	s.emit(Event{
+		T:    s.Now(),
+		Ev:   "fault",
+		From: id,
+		Why:  "crash",
+	})
+	s.checkNode(h)
 }
 
 // Restart boots a crashed node from whatever survived on disk.
@@ -327,6 +468,13 @@ func (s *Sim) Restart(id raft.NodeID) {
 	}
 	s.logf("RESTART %d", id)
 	s.boot(h)
+	s.emit(Event{
+		T:    s.Now(),
+		Ev:   "fault",
+		From: id,
+		Why:  "restart",
+	})
+	s.checkNode(h)
 }
 
 // ---------- client + inspection ----------
@@ -340,6 +488,7 @@ func (s *Sim) Propose(id raft.NodeID, data []byte) bool {
 	ok := h.node.Propose(data)
 	s.pump(h)
 	s.check()
+	s.checkNode(h)
 	return ok
 }
 
