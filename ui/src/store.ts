@@ -13,10 +13,13 @@ export interface TraceStore {
   events: Event[];
   cursor: number;
   isPlaying: boolean;
+  isLive: boolean;
   playbackSpeed: number; // ms per tick in auto-play
   selectedNodeId: NodeID | null;
 
   // Actions
+  startLiveSession: (seed: number) => void;
+  issueCommand: (kind: string, node?: number) => void;
   loadTrace: (ndjsonText: string) => void;
   stepForward: () => void;
   stepBackward: () => void;
@@ -33,6 +36,7 @@ export const useClusterStore = create<TraceStore>((set, get) => ({
   events: [],
   cursor: 0,
   isPlaying: false,
+  isLive: false,
   playbackSpeed: 50,
   selectedNodeId: null,
 
@@ -48,6 +52,47 @@ export const useClusterStore = create<TraceStore>((set, get) => ({
       cursor: 0,
       isPlaying: false,
     });
+  },
+
+  startLiveSession: (seed: number) => {
+    const { applyEvent, resetCluster } = get();
+    resetCluster([1, 2, 3, 4, 5]);
+    set({
+      isLive: true,
+      isPlaying: false,
+      events: [],
+      cursor: 0,
+      header: { v: 1, seed, nodes: [1, 2, 3, 4, 5] },
+    });
+
+    const onEvent = (evJSON: string) => {
+      try {
+        const ev = JSON.parse(evJSON) as Event;
+        applyEvent(ev);
+        set((state) => ({
+          events: [...state.events, ev],
+          cursor: state.events.length + 1,
+        }));
+      } catch (err) {
+        console.error("Failed to parse live event:", err);
+      }
+    };
+
+    const sim = typeof window !== "undefined" ? window.RaftSim : (globalThis as any).RaftSim;
+    if (sim) {
+      sim.start(seed, onEvent);
+    } else {
+      console.warn("RaftSim is not available");
+    }
+  },
+
+  issueCommand: (kind: string, node?: number) => {
+    const sim = typeof window !== "undefined" ? window.RaftSim : (globalThis as any).RaftSim;
+    if (sim) {
+      sim.sendCommand(JSON.stringify({ kind, node }));
+    } else {
+      console.warn("RaftSim is not available");
+    }
   },
 
   loadTrace: (ndjsonText: string) => {
@@ -80,6 +125,7 @@ export const useClusterStore = create<TraceStore>((set, get) => ({
       events,
       cursor: 0,
       isPlaying: false,
+      isLive: false,
       cluster: initial,
       selectedNodeId: null,
     });

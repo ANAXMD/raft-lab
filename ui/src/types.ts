@@ -2,6 +2,16 @@ export type NodeID = number;
 export type Term = number;
 export type Index = number;
 
+declare global {
+  interface Window {
+    RaftSim?: {
+      start: (seed: number, onEvent: (evJSON: string) => void) => void;
+      sendCommand: (cmdJSON: string) => void;
+    };
+    Go?: any;
+  }
+}
+
 export const Role = {
   Follower: 0,
   PreCandidate: 1,

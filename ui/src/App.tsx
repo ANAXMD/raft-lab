@@ -12,6 +12,11 @@ import {
   Radio,
   FileText,
   Activity,
+  Zap,
+  PowerOff,
+  RefreshCw,
+  ShieldAlert,
+  HeartPulse,
 } from "lucide-react";
 import { useClusterStore } from "./store";
 import { ClusterRing } from "./components/ClusterRing";
@@ -24,10 +29,13 @@ export function App() {
     events,
     cursor,
     isPlaying,
+    isLive,
     playbackSpeed,
     header,
     selectedNodeId,
     loadTrace,
+    startLiveSession,
+    issueCommand,
     stepForward,
     stepBackward,
     seekTo,
@@ -177,6 +185,30 @@ export function App() {
             <span className="font-mono font-bold text-emerald-300">{inflightList.length} pkts</span>
           </div>
 
+          {/* Start Live Session Button */}
+          <button
+            onClick={() => startLiveSession(header?.seed ?? 182)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all shadow-md active:scale-95 ${
+              isLive
+                ? "bg-rose-600/90 hover:bg-rose-600 text-white border-rose-500 shadow-rose-600/25 ring-2 ring-rose-500/30"
+                : "bg-sky-600 hover:bg-sky-500 text-white border-sky-500 shadow-sky-600/25"
+            }`}
+            title="Start live Go WebAssembly Raft simulation"
+          >
+            <Zap className={`w-3.5 h-3.5 ${isLive ? "fill-white animate-bounce" : ""}`} />
+            <span>{isLive ? "Live Session Active" : "Start Live Session"}</span>
+          </button>
+
+          {/* Global Heal Network Button */}
+          <button
+            onClick={() => issueCommand("heal")}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600/80 hover:bg-emerald-600 text-white text-xs font-medium border border-emerald-500/60 transition-all shadow-md shadow-emerald-600/20 active:scale-95"
+            title="Heal all partitions in the cluster"
+          >
+            <HeartPulse className="w-3.5 h-3.5" />
+            <span>Heal Network</span>
+          </button>
+
           {/* Load Trace File Button */}
           <input
             type="file"
@@ -187,7 +219,7 @@ export function App() {
           />
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/80 hover:bg-indigo-600 text-white text-xs font-medium border border-indigo-500/60 transition-all shadow-md shadow-indigo-600/20 active:scale-95"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-medium border border-slate-700 transition-all active:scale-95"
             title="Upload NDJSON trace file"
           >
             <Upload className="w-3.5 h-3.5" />
@@ -456,6 +488,48 @@ export function App() {
                       <div className="text-amber-300 font-bold text-sm">
                         {inspectedNode.log.length}
                       </div>
+                    </div>
+                  </div>
+
+                  {/* Interactive Fault Injection Controls */}
+                  <div className="pt-3 border-t border-slate-700/50 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">
+                        Fault Controls (Node {inspectedNode.id})
+                      </span>
+                      <span className="text-[10px] text-slate-500 font-mono">
+                        {inspectedNode.up ? "Online" : "Offline"}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        onClick={() => issueCommand("kill", inspectedNode.id)}
+                        disabled={!inspectedNode.up}
+                        className="flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg bg-rose-950/70 hover:bg-rose-900 disabled:opacity-40 disabled:hover:bg-rose-950/70 text-rose-300 font-medium text-xs border border-rose-800/60 transition-all active:scale-95 shadow-sm"
+                        title={`Crash Node ${inspectedNode.id}`}
+                      >
+                        <PowerOff className="w-3.5 h-3.5" />
+                        <span>Crash</span>
+                      </button>
+
+                      <button
+                        onClick={() => issueCommand("start", inspectedNode.id)}
+                        disabled={inspectedNode.up}
+                        className="flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg bg-emerald-950/70 hover:bg-emerald-900 disabled:opacity-40 disabled:hover:bg-emerald-950/70 text-emerald-300 font-medium text-xs border border-emerald-800/60 transition-all active:scale-95 shadow-sm"
+                        title={`Restart Node ${inspectedNode.id}`}
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Restart</span>
+                      </button>
+
+                      <button
+                        onClick={() => issueCommand("isolate", inspectedNode.id)}
+                        className="flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg bg-amber-950/70 hover:bg-amber-900 text-amber-300 font-medium text-xs border border-amber-800/60 transition-all active:scale-95 shadow-sm"
+                        title={`Isolate Node ${inspectedNode.id} from network`}
+                      >
+                        <ShieldAlert className="w-3.5 h-3.5" />
+                        <span>Isolate</span>
+                      </button>
                     </div>
                   </div>
                 </div>

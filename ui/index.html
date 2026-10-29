@@ -4,7 +4,30 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ui</title>
+    <title>Raft Consensus Trace Visualizer</title>
+    <script src="/wasm_exec.js"></script>
+    <script>
+      const go = new Go();
+      WebAssembly.instantiateStreaming
+        ? WebAssembly.instantiateStreaming(fetch("/sim.wasm"), go.importObject)
+            .then((result) => {
+              go.run(result.instance);
+            })
+            .catch((err) => {
+              fetch("/sim.wasm")
+                .then((resp) => resp.arrayBuffer())
+                .then((bytes) => WebAssembly.instantiate(bytes, go.importObject))
+                .then((result) => {
+                  go.run(result.instance);
+                });
+            })
+        : fetch("/sim.wasm")
+            .then((resp) => resp.arrayBuffer())
+            .then((bytes) => WebAssembly.instantiate(bytes, go.importObject))
+            .then((result) => {
+              go.run(result.instance);
+            });
+    </script>
   </head>
   <body>
     <div id="root"></div>
