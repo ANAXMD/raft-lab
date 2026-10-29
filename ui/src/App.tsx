@@ -55,7 +55,7 @@ export function App() {
     async function loadDefaultTrace() {
       setIsLoading(true);
       try {
-        const res = await fetch("/trace_seed182.ndjson");
+        const res = await fetch("./trace_seed182.ndjson");
         if (res.ok) {
           const text = await res.text();
           loadTrace(text);
