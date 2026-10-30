@@ -84,9 +84,10 @@ type host struct {
 }
 
 type event struct {
-	at  int64
-	seq uint64
-	fn  func()
+	at    int64
+	phase int // 0 = normal events, 1 = commands: a command at time T runs AFTER every other event at T
+	seq   uint64
+	fn    func()
 }
 type eventHeap []event
 
@@ -94,6 +95,9 @@ func (h eventHeap) Len() int { return len(h) }
 func (h eventHeap) Less(i, j int) bool {
 	if h[i].at != h[j].at {
 		return h[i].at < h[j].at
+	}
+	if h[i].phase != h[j].phase {
+		return h[i].phase < h[j].phase
 	}
 	return h[i].seq < h[j].seq
 }
@@ -129,6 +133,9 @@ type Sim struct {
 	trace     hashTrace
 	TraceLog  []string // optional human-readable trace (the UI will consume this)
 	KeepTrace bool
+
+	initCfg SessionConfig // configuration at construction, saved into exported sessions
+	session []Command     // every command applied so far, in order (see session.go)
 }
 
 type hashTrace struct{ h uint64 }
@@ -153,6 +160,7 @@ func New(cfg Config) *Sim {
 		hosts:        map[raft.NodeID]*host{},
 		cut:          map[link]bool{},
 		leaderOfTerm: map[raft.Term]raft.NodeID{},
+		initCfg:      sessionConfigOf(cfg),
 	}
 	for i := 1; i <= cfg.N; i++ {
 		s.ids = append(s.ids, raft.NodeID(i))
@@ -187,6 +195,14 @@ func (s *Sim) boot(h *host) {
 func (s *Sim) at(delay int64, fn func()) {
 	s.seq++
 	heap.Push(&s.queue, event{at: s.now + delay, seq: s.seq, fn: fn})
+}
+
+// atAbs schedules a command at absolute virtual time t, ordered after every
+// normal event at the same instant (see event.phase). Live sessions and replays
+// therefore apply commands at exactly the same point in the event order.
+func (s *Sim) atAbs(t int64, fn func()) {
+	s.seq++
+	heap.Push(&s.queue, event{at: t, phase: 1, seq: s.seq, fn: fn})
 }
 
 func (s *Sim) scheduleTick(h *host, delay int64) {
@@ -289,7 +305,7 @@ func (s *Sim) pump(h *host) {
 					Ev:      "log",
 					From:    h.id,
 					Idx:     rd.Entries[0].Index,
-					Entries: rd.Entries,
+					Entries: traceEntries(rd.Entries),
 				})
 			}
 		}
@@ -394,27 +410,48 @@ func (s *Sim) deliver(m raft.Message, msgID int) {
 
 // ---------- fault injection ----------
 
+// cutLink blocks messages in both directions between a and b (no event).
+func (s *Sim) cutLink(a, b raft.NodeID) { s.cut[link{a, b}], s.cut[link{b, a}] = true, true }
+
+// cuts lists every currently blocked link once, as sorted [a b] pairs with a < b.
+func (s *Sim) cuts() [][2]raft.NodeID {
+	var out [][2]raft.NodeID
+	for _, a := range s.ids {
+		for _, b := range s.ids {
+			if a < b && s.cut[link{a, b}] {
+				out = append(out, [2]raft.NodeID{a, b})
+			}
+		}
+	}
+	return out
+}
+
+// emitFault announces a network fault together with the COMPLETE set of cut
+// links afterwards, so a viewer never has to infer topology from deltas.
+// An absent "cuts" field on a network fault means "no links are cut".
+func (s *Sim) emitFault(why string, node raft.NodeID) {
+	s.emit(Event{T: s.Now(), Ev: "fault", From: node, Why: why, Cuts: s.cuts()})
+}
+
 // Cut blocks messages in both directions between a and b.
-func (s *Sim) Cut(a, b raft.NodeID) { s.cut[link{a, b}], s.cut[link{b, a}] = true, true }
+func (s *Sim) Cut(a, b raft.NodeID) {
+	s.cutLink(a, b)
+	s.emitFault("cut", 0)
+}
 
 // Isolate cuts id off from everyone.
 func (s *Sim) Isolate(id raft.NodeID) {
 	for _, o := range s.ids {
 		if o != id {
-			s.Cut(id, o)
+			s.cutLink(id, o)
 		}
 	}
-	s.emit(Event{
-		T:    s.Now(),
-		Ev:   "fault",
-		From: id,
-		Why:  "isolate",
-	})
+	s.emitFault("isolate", id)
 }
 
 // Partition splits the cluster into groups that can only talk within a group.
 func (s *Sim) Partition(groups ...[]raft.NodeID) {
-	s.Heal()
+	s.cut = map[link]bool{}
 	gid := map[raft.NodeID]int{}
 	for i, g := range groups {
 		for _, id := range g {
@@ -424,25 +461,17 @@ func (s *Sim) Partition(groups ...[]raft.NodeID) {
 	for _, a := range s.ids {
 		for _, b := range s.ids {
 			if a < b && gid[a] != gid[b] {
-				s.Cut(a, b)
+				s.cutLink(a, b)
 			}
 		}
 	}
-	s.emit(Event{
-		T:   s.Now(),
-		Ev:  "fault",
-		Why: "partition",
-	})
+	s.emitFault("partition", 0)
 }
 
 // Heal removes every partition.
 func (s *Sim) Heal() {
 	s.cut = map[link]bool{}
-	s.emit(Event{
-		T:   s.Now(),
-		Ev:  "fault",
-		Why: "heal",
-	})
+	s.emitFault("heal", 0)
 }
 
 // Crash power-cuts a node: unsynced disk writes are lost, volatile state vanishes.

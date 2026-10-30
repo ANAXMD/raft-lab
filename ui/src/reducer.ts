@@ -1,4 +1,4 @@
-import type { ClusterState, Event, NodeID, NodeState } from "./types";
+import type { ClusterState, Cut, Event, NodeID, NodeState, ProposeOutcome } from "./types";
 import { Role } from "./types";
 
 export function createInitialState(nodeIds: NodeID[] = [1, 2, 3, 4, 5]): ClusterState {
@@ -19,24 +19,46 @@ export function createInitialState(nodeIds: NodeID[] = [1, 2, 3, 4, 5]): Cluster
     time: 0,
     nodes,
     inflight: {},
+    cuts: [],
+    net: null,
+    lastPropose: null,
   };
 }
 
+/** Faults that rewrite the whole set of cut links (crash/restart leave it alone). */
+const NETWORK_FAULTS = new Set(["isolate", "partition", "cut", "heal"]);
+const PROPOSE_OUTCOMES = new Set<string>(["accepted", "rejected", "no-leader"]);
+
+/** True if the link between a and b is cut (links are undirected in the UI). */
+export function isCut(cuts: readonly Cut[], a: NodeID, b: NodeID): boolean {
+  return cuts.some(([x, y]) => (x === a && y === b) || (x === b && y === a));
+}
+
 export function reduce(state: ClusterState, event: Event): ClusterState {
-  const nextNodes: Record<NodeID, NodeState> = {};
-  for (const id in state.nodes) {
-    const n = state.nodes[id];
-    nextNodes[id] = {
-      ...n,
-      log: [...n.log],
-    };
-  }
+  // Structural sharing: node objects are shared with the previous state until this
+  // event changes them (own() clones one on first write). Log arrays are replaced,
+  // never mutated in place, so previous states (checkpoints) stay valid.
+  const nextNodes: Record<NodeID, NodeState> = { ...state.nodes };
+  const owned = new Set<NodeID>();
+  const own = (id: NodeID): NodeState | undefined => {
+    const n = nextNodes[id];
+    if (!n) return undefined;
+    if (!owned.has(id)) {
+      nextNodes[id] = { ...n };
+      owned.add(id);
+    }
+    return nextNodes[id];
+  };
   const nextInflight = { ...state.inflight };
 
   const nextState: ClusterState = {
     time: event.t ?? state.time,
     nodes: nextNodes,
     inflight: nextInflight,
+    // These are replaced, never mutated, so sharing them between states is safe.
+    cuts: state.cuts,
+    net: state.net,
+    lastPropose: state.lastPropose,
   };
 
   switch (event.ev) {
@@ -65,7 +87,7 @@ export function reduce(state: ClusterState, event: Event): ClusterState {
 
     case "node": {
       if (event.from != null) {
-        const node = nextNodes[event.from] ?? {
+        const node = own(event.from) ?? {
           id: event.from,
           role: Role.Follower,
           term: 0,
@@ -92,7 +114,7 @@ export function reduce(state: ClusterState, event: Event): ClusterState {
 
     case "log": {
       if (event.from != null && event.entries) {
-        const node = nextNodes[event.from];
+        const node = own(event.from);
         if (node) {
           const startIdx = (event.idx ?? 1) - 1;
           const currentLog = node.log.slice(0, Math.max(0, startIdx));
@@ -106,10 +128,31 @@ export function reduce(state: ClusterState, event: Event): ClusterState {
     case "fault": {
       if (event.from != null && nextNodes[event.from]) {
         if (event.why === "crash") {
-          nextNodes[event.from].up = false;
+          own(event.from)!.up = false;
         } else if (event.why === "restart") {
-          nextNodes[event.from].up = true;
+          own(event.from)!.up = true;
         }
+      }
+      if (event.why && NETWORK_FAULTS.has(event.why)) {
+        // The event carries the COMPLETE set of cut links; absent means none.
+        nextState.cuts = event.cuts ?? [];
+      }
+      break;
+    }
+
+    case "net": {
+      if (event.net) nextState.net = event.net;
+      break;
+    }
+
+    case "propose": {
+      if (event.why && PROPOSE_OUTCOMES.has(event.why)) {
+        nextState.lastPropose = {
+          t: event.t,
+          node: event.from ?? 0,
+          outcome: event.why as ProposeOutcome,
+          data: event.msg ?? "",
+        };
       }
       break;
     }

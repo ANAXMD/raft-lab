@@ -2,6 +2,7 @@ import React, { useMemo } from "react";
 import { useClusterStore } from "../store";
 import { Role } from "../types";
 import type { NodeID } from "../types";
+import { isCut } from "../reducer";
 
 interface Point {
   x: number;
@@ -136,6 +137,23 @@ export const ClusterRing: React.FC = () => {
                 (m.from === from && m.to === to) ||
                 (m.from === to && m.to === from)
             );
+
+            if (isCut(cluster.cuts, from, to)) {
+              // A cut link: red, dashed, with a cross at the midpoint. Nothing crosses it.
+              const mx = (p1.x + p2.x) / 2;
+              const my = (p1.y + p2.y) / 2;
+              return (
+                <g key={`line-${from}-${to}`} data-cut={`${from}-${to}`}>
+                  <line
+                    x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y}
+                    stroke="#ef4444" strokeWidth={2} strokeDasharray="9 7" strokeOpacity={0.8}
+                  />
+                  <circle cx={mx} cy={my} r={8} fill="#0f172a" stroke="#ef4444" strokeWidth={1.5} />
+                  <path d={`M ${mx - 3.5} ${my - 3.5} L ${mx + 3.5} ${my + 3.5} M ${mx + 3.5} ${my - 3.5} L ${mx - 3.5} ${my + 3.5}`}
+                    stroke="#ef4444" strokeWidth={1.8} strokeLinecap="round" />
+                </g>
+              );
+            }
 
             return (
               <line

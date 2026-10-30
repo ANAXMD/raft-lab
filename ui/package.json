@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "build:wasm": "cd .. && GOOS=js GOARCH=wasm go build -o ui/public/sim.wasm ./cmd/wasm && cp \"$(go env GOROOT)/lib/wasm/wasm_exec.js\" ui/public/wasm_exec.js",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",

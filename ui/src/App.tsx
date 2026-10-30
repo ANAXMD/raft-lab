@@ -17,9 +17,12 @@ import {
   RefreshCw,
   ShieldAlert,
   HeartPulse,
+  SlidersHorizontal,
 } from "lucide-react";
-import { useClusterStore } from "./store";
+import { isSessionText, useClusterStore } from "./store";
+import { useSimReady } from "./useSimReady";
 import { ClusterRing } from "./components/ClusterRing";
+import { LiveControls } from "./components/LiveControls";
 import { Role } from "./types";
 import type { EventKind } from "./types";
 
@@ -35,7 +38,11 @@ export function App() {
     selectedNodeId,
     loadTrace,
     startLiveSession,
-    issueCommand,
+    sendCommand,
+    replaySession,
+    commandError,
+    clearCommandError,
+    goLive,
     stepForward,
     stepBackward,
     seekTo,
@@ -47,7 +54,9 @@ export function App() {
   } = useClusterStore();
 
   const [isLoading, setIsLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"inspector" | "events" | "network">("inspector");
+  const [activeTab, setActiveTab] = useState<"inspector" | "events" | "network" | "controls">("inspector");
+  const simReady = useSimReady();
+  const behindLive = isLive && cursor < events.length;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Auto-load default seed 182 trace from public/trace_seed182.ndjson on initial mount
@@ -85,11 +94,16 @@ export function App() {
     const reader = new FileReader();
     reader.onload = (event) => {
       const content = event.target?.result as string;
-      if (content) {
+      if (!content) return;
+      // A downloaded session is replayed in the simulator; anything else is an NDJSON trace.
+      if (isSessionText(content)) {
+        if (!replaySession(content)) setActiveTab("controls");
+      } else {
         loadTrace(content);
       }
     };
     reader.readAsText(file);
+    e.target.value = ""; // allow loading the same file twice
   };
 
   // Find current leader
@@ -134,6 +148,10 @@ export function App() {
         return { label: "NODE", bg: "bg-purple-900/60 text-purple-300 border-purple-700" };
       case "log":
         return { label: "LOG", bg: "bg-cyan-900/60 text-cyan-300 border-cyan-700" };
+      case "propose":
+        return { label: "PROPOSE", bg: "bg-teal-900/60 text-teal-300 border-teal-700" };
+      case "net":
+        return { label: "NET", bg: "bg-violet-900/60 text-violet-300 border-violet-700" };
       case "violation":
         return { label: "VIOLATION", bg: "bg-red-950 text-red-400 border-red-500" };
       default:
@@ -188,21 +206,23 @@ export function App() {
           {/* Start Live Session Button */}
           <button
             onClick={() => startLiveSession(header?.seed ?? 182)}
+            disabled={!simReady}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all shadow-md active:scale-95 ${
               isLive
                 ? "bg-rose-600/90 hover:bg-rose-600 text-white border-rose-500 shadow-rose-600/25 ring-2 ring-rose-500/30"
                 : "bg-sky-600 hover:bg-sky-500 text-white border-sky-500 shadow-sky-600/25"
             }`}
-            title="Start live Go WebAssembly Raft simulation"
+            title={simReady ? "Start live Go WebAssembly Raft simulation" : "Loading sim.wasm…"}
           >
             <Zap className={`w-3.5 h-3.5 ${isLive ? "fill-white animate-bounce" : ""}`} />
-            <span>{isLive ? "Live Session Active" : "Start Live Session"}</span>
+            <span>{isLive ? "Restart Live Session" : simReady ? "Start Live Session" : "Loading simulator…"}</span>
           </button>
 
           {/* Global Heal Network Button */}
           <button
-            onClick={() => issueCommand("heal")}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600/80 hover:bg-emerald-600 text-white text-xs font-medium border border-emerald-500/60 transition-all shadow-md shadow-emerald-600/20 active:scale-95"
+            onClick={() => sendCommand({ kind: "heal" })}
+            disabled={!isLive}
+            className="disabled:opacity-40 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600/80 hover:bg-emerald-600 text-white text-xs font-medium border border-emerald-500/60 transition-all shadow-md shadow-emerald-600/20 active:scale-95"
             title="Heal all partitions in the cluster"
           >
             <HeartPulse className="w-3.5 h-3.5" />
@@ -214,19 +234,31 @@ export function App() {
             type="file"
             ref={fileInputRef}
             onChange={handleFileUpload}
-            accept=".ndjson,.golden,.txt"
+            accept=".ndjson,.golden,.txt,.json"
             className="hidden"
           />
           <button
             onClick={() => fileInputRef.current?.click()}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-medium border border-slate-700 transition-all active:scale-95"
-            title="Upload NDJSON trace file"
+            title="Load an NDJSON trace, or a downloaded session to replay"
           >
             <Upload className="w-3.5 h-3.5" />
-            <span>Load Trace</span>
+            <span>Load</span>
           </button>
         </div>
       </header>
+
+      {commandError && (
+        <div
+          role="alert"
+          className="flex items-center justify-between px-6 py-2 bg-rose-950/80 border-b border-rose-800 text-xs text-rose-200"
+        >
+          <span>{commandError}</span>
+          <button onClick={clearCommandError} className="text-rose-300 hover:text-white font-bold px-2">
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Main Studio Viewport */}
       <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-0 overflow-hidden">
@@ -259,8 +291,22 @@ export function App() {
             {/* Timeline Slider with Cursor Counter */}
             <div className="space-y-1.5">
               <div className="flex justify-between text-xs text-slate-400">
-                <span className="font-mono">
+                <span className="font-mono flex items-center gap-2">
                   Step {cursor} of {events.length}
+                  {isLive && (
+                    <button
+                      onClick={goLive}
+                      disabled={!behindLive}
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                        behindLive
+                          ? "bg-sky-600 border-sky-400 text-white hover:bg-sky-500"
+                          : "bg-rose-950/60 border-rose-700 text-rose-300"
+                      }`}
+                      title={behindLive ? "Jump to the live edge" : "Following the live simulation"}
+                    >
+                      {behindLive ? "Jump to live" : "● LIVE"}
+                    </button>
+                  )}
                 </span>
                 <span className="font-mono">
                   {events.length > 0
@@ -330,7 +376,10 @@ export function App() {
                 </button>
 
                 {/* Speed Selector */}
-                <div className="flex items-center rounded-lg bg-slate-800/80 border border-slate-700/60 text-xs overflow-hidden">
+                <div
+                  title="Trace playback speed (not the live simulation speed — see the Controls tab)"
+                  className="flex items-center rounded-lg bg-slate-800/80 border border-slate-700/60 text-xs overflow-hidden"
+                >
                   {[
                     { label: "0.5x", val: 100 },
                     { label: "1x", val: 50 },
@@ -393,6 +442,18 @@ export function App() {
             >
               <Layers className="w-3.5 h-3.5" />
               <span>Inflight ({inflightList.length})</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab("controls")}
+              className={`flex items-center gap-2 px-3 py-2 text-xs font-medium border-b-2 transition-all ${
+                activeTab === "controls"
+                  ? "border-sky-400 text-sky-400"
+                  : "border-transparent text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+              <span>Controls</span>
             </button>
           </div>
 
@@ -503,8 +564,8 @@ export function App() {
                     </div>
                     <div className="grid grid-cols-3 gap-2">
                       <button
-                        onClick={() => issueCommand("kill", inspectedNode.id)}
-                        disabled={!inspectedNode.up}
+                        onClick={() => sendCommand({ kind: "crash", node: inspectedNode.id })}
+                        disabled={!isLive || !inspectedNode.up}
                         className="flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg bg-rose-950/70 hover:bg-rose-900 disabled:opacity-40 disabled:hover:bg-rose-950/70 text-rose-300 font-medium text-xs border border-rose-800/60 transition-all active:scale-95 shadow-sm"
                         title={`Crash Node ${inspectedNode.id}`}
                       >
@@ -513,8 +574,8 @@ export function App() {
                       </button>
 
                       <button
-                        onClick={() => issueCommand("start", inspectedNode.id)}
-                        disabled={inspectedNode.up}
+                        onClick={() => sendCommand({ kind: "restart", node: inspectedNode.id })}
+                        disabled={!isLive || inspectedNode.up}
                         className="flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg bg-emerald-950/70 hover:bg-emerald-900 disabled:opacity-40 disabled:hover:bg-emerald-950/70 text-emerald-300 font-medium text-xs border border-emerald-800/60 transition-all active:scale-95 shadow-sm"
                         title={`Restart Node ${inspectedNode.id}`}
                       >
@@ -523,8 +584,9 @@ export function App() {
                       </button>
 
                       <button
-                        onClick={() => issueCommand("isolate", inspectedNode.id)}
-                        className="flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg bg-amber-950/70 hover:bg-amber-900 text-amber-300 font-medium text-xs border border-amber-800/60 transition-all active:scale-95 shadow-sm"
+                        onClick={() => sendCommand({ kind: "isolate", node: inspectedNode.id })}
+                        disabled={!isLive}
+                        className="disabled:opacity-40 flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg bg-amber-950/70 hover:bg-amber-900 text-amber-300 font-medium text-xs border border-amber-800/60 transition-all active:scale-95 shadow-sm"
                         title={`Isolate Node ${inspectedNode.id} from network`}
                       >
                         <ShieldAlert className="w-3.5 h-3.5" />
@@ -622,7 +684,15 @@ export function App() {
                             {ev.ev === "send" && `${ev.from} ➔ ${ev.to} (${ev.type})`}
                             {ev.ev === "deliver" && `Delivered ${ev.from} ➔ ${ev.to}`}
                             {ev.ev === "drop" && `Dropped ${ev.from} ➔ ${ev.to} [${ev.why}]`}
-                            {ev.ev === "fault" && `Node ${ev.from} ${ev.why}`}
+                            {ev.ev === "fault" &&
+                              (ev.from ? `Node ${ev.from} ${ev.why}` : `Network ${ev.why}`) +
+                                (ev.why && ["cut", "isolate", "partition", "heal"].includes(ev.why)
+                                  ? ` (${ev.cuts?.length ?? 0} links cut)`
+                                  : "")}
+                            {ev.ev === "propose" &&
+                              `${ev.msg} → ${ev.why}${ev.from ? ` (node ${ev.from})` : ""}`}
+                            {ev.ev === "net" &&
+                              `loss ${Math.round((ev.net?.drop ?? 0) * 100)}% dup ${Math.round((ev.net?.dup ?? 0) * 100)}% delay ${ev.net?.minDelay}-${ev.net?.maxDelay}ms`}
                             {ev.ev === "node" && `Node ${ev.from} state update`}
                             {ev.ev === "log" && `Node ${ev.from} logged +${ev.entries?.length ?? 1} entries`}
                             {ev.ev === "violation" && `Safety Violation: ${ev.msg}`}
@@ -635,6 +705,8 @@ export function App() {
                 </div>
               </div>
             )}
+
+            {activeTab === "controls" && <LiveControls />}
 
             {/* Network Inflight View */}
             {activeTab === "network" && (
