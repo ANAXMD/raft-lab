@@ -4,7 +4,7 @@
 
 [**▶ Live demo**](https://anaxmd.github.io/raft-lab/) · runs the real Go code in your browser via WebAssembly
 
-![A 5-node cluster split by a network partition: leader on top, red dashed links are cut](docs/partition.png)
+![Raft Consensus Browser Visualizer Demo](docs/demo.gif)
 
 Raft is the algorithm behind etcd, Consul and CockroachDB: it lets several machines agree on one
 sequence of events even when machines crash and the network drops, delays or duplicates messages.
