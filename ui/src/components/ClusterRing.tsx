@@ -12,8 +12,8 @@ interface Point {
 const VIEW_BOX_SIZE = 640;
 const CENTER_X = VIEW_BOX_SIZE / 2;
 const CENTER_Y = VIEW_BOX_SIZE / 2;
-const RING_RADIUS = 210;
-const NODE_RADIUS = 42;
+const RING_RADIUS = 245;
+const NODE_RADIUS = 46;
 
 export const ClusterRing: React.FC = () => {
   const cluster = useClusterStore((s) => s.cluster);
@@ -95,10 +95,10 @@ export const ClusterRing: React.FC = () => {
   };
 
   return (
-    <div className="relative flex flex-col items-center justify-center p-4">
+    <div className="relative flex items-center justify-center w-full h-full p-2">
       <svg
         viewBox={`0 0 ${VIEW_BOX_SIZE} ${VIEW_BOX_SIZE}`}
-        className="w-full max-w-[620px] h-auto select-none overflow-visible filter drop-shadow-2xl"
+        className="w-[600px] h-[600px] max-w-full max-h-full aspect-square select-none overflow-visible filter drop-shadow-2xl"
       >
         <defs>
           {/* Subtle glow filter */}
@@ -126,7 +126,7 @@ export const ClusterRing: React.FC = () => {
           stroke="url(#ring-gradient)"
           strokeWidth="1.5"
           strokeDasharray="6 8"
-          className="animate-[spin_120s_linear_infinite] origin-center"
+          opacity="0.5"
         />
 
         {/* Network connection mesh lines between all nodes */}
@@ -258,12 +258,12 @@ export const ClusterRing: React.FC = () => {
                 {isLeader && (
                   <>
                     <circle
-                      r={NODE_RADIUS + 9}
+                      r={NODE_RADIUS + 8}
                       fill="none"
                       stroke="#f59e0b"
                       strokeWidth="2.5"
                       strokeDasharray="4 3"
-                      className="animate-[spin_10s_linear_infinite] origin-center opacity-75"
+                      className="opacity-75"
                     />
                     <circle
                       r={NODE_RADIUS + 4}
@@ -294,7 +294,7 @@ export const ClusterRing: React.FC = () => {
                     stroke="#a855f7"
                     strokeWidth="2"
                     strokeDasharray="5 3"
-                    className="animate-[spin_6s_linear_infinite] origin-center opacity-65"
+                    className="opacity-65"
                   />
                 )}
 
@@ -323,10 +323,10 @@ export const ClusterRing: React.FC = () => {
                   <>
                     {/* Node ID */}
                     <text
-                      y="-12"
+                      y="-14"
                       textAnchor="middle"
                       fill="#f8fafc"
-                      fontSize="17"
+                      fontSize="18"
                       fontWeight="700"
                       fontFamily="system-ui, sans-serif"
                     >
@@ -335,20 +335,20 @@ export const ClusterRing: React.FC = () => {
 
                     {/* Role Pill */}
                     <rect
-                      x="-31"
-                      y="-4"
-                      width="62"
-                      height="15"
+                      x="-33"
+                      y="-5"
+                      width="66"
+                      height="17"
                       rx="4"
                       fill={badge.bg}
                       stroke={badge.color}
                       strokeWidth="0.75"
                     />
                     <text
-                      y="7"
+                      y="7.5"
                       textAnchor="middle"
                       fill={badge.color}
-                      fontSize="8.5"
+                      fontSize="9"
                       fontWeight="700"
                       fontFamily="system-ui, sans-serif"
                       letterSpacing="0.5"
@@ -358,10 +358,10 @@ export const ClusterRing: React.FC = () => {
 
                     {/* Term & Commit Indices */}
                     <text
-                      y="23"
+                      y="25"
                       textAnchor="middle"
                       fill="#94a3b8"
-                      fontSize="10"
+                      fontSize="10.5"
                       fontWeight="500"
                       fontFamily="ui-monospace, monospace"
                     >
@@ -370,10 +370,10 @@ export const ClusterRing: React.FC = () => {
 
                     {/* Log count indicator */}
                     <text
-                      y="34"
+                      y="37"
                       textAnchor="middle"
                       fill="#64748b"
-                      fontSize="9"
+                      fontSize="9.5"
                       fontFamily="ui-monospace, monospace"
                     >
                       Log:{node?.last ?? 0}

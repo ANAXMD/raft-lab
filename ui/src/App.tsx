@@ -162,9 +162,9 @@ export function App() {
   const inflightList = useMemo(() => Object.values(cluster.inflight), [cluster.inflight]);
 
   return (
-    <div className="flex flex-col min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-sky-500 selection:text-white">
+    <div className="flex flex-col h-screen h-[100dvh] bg-slate-950 text-slate-100 font-sans selection:bg-sky-500 selection:text-white overflow-hidden">
       {/* Top Navigation Bar */}
-      <header className="flex items-center justify-between px-6 py-3.5 bg-slate-900/90 backdrop-blur border-b border-slate-800/80 sticky top-0 z-50">
+      <header className="flex-shrink-0 flex items-center justify-between px-6 py-3 bg-slate-900/90 backdrop-blur border-b border-slate-800/80 z-50">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-sky-500/20">
             <Radio className="w-5 h-5 text-white animate-pulse" />
@@ -251,7 +251,7 @@ export function App() {
       {commandError && (
         <div
           role="alert"
-          className="flex items-center justify-between px-6 py-2 bg-rose-950/80 border-b border-rose-800 text-xs text-rose-200"
+          className="flex-shrink-0 flex items-center justify-between px-6 py-2 bg-rose-950/80 border-b border-rose-800 text-xs text-rose-200"
         >
           <span>{commandError}</span>
           <button onClick={clearCommandError} className="text-rose-300 hover:text-white font-bold px-2">
@@ -261,9 +261,9 @@ export function App() {
       )}
 
       {/* Main Studio Viewport */}
-      <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-0 overflow-hidden">
+      <main className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-0 overflow-hidden">
         {/* Left Column: Visualizer Canvas & Playback Controls */}
-        <section className="lg:col-span-7 xl:col-span-8 flex flex-col justify-between border-r border-slate-800/80 bg-gradient-to-b from-slate-950 via-slate-900/40 to-slate-950 p-6 relative">
+        <section className="lg:col-span-7 xl:col-span-8 flex flex-col justify-between h-full min-h-0 border-r border-slate-800/80 bg-gradient-to-b from-slate-950 via-slate-900/40 to-slate-950 p-6 relative overflow-hidden">
           {/* Subtle Background Grid */}
           <div
             className="absolute inset-0 opacity-[0.03] pointer-events-none"
@@ -275,7 +275,7 @@ export function App() {
           />
 
           {/* Cluster Ring Canvas */}
-          <div className="flex-1 flex flex-col items-center justify-center relative z-10">
+          <div className="flex-1 min-h-0 flex items-center justify-center relative z-10 w-full overflow-hidden">
             {isLoading ? (
               <div className="flex flex-col items-center gap-3 text-slate-400 py-16">
                 <div className="w-8 h-8 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" />
@@ -287,7 +287,7 @@ export function App() {
           </div>
 
           {/* Bottom Interactive Playback Console */}
-          <div className="w-full max-w-2xl mx-auto bg-slate-900/90 backdrop-blur-md rounded-2xl border border-slate-800/90 p-4 shadow-2xl z-20 space-y-3.5">
+          <div className="flex-shrink-0 w-full max-w-2xl mx-auto bg-slate-900/90 backdrop-blur-md rounded-2xl border border-slate-800/90 p-4 shadow-2xl z-20 space-y-3.5">
             {/* Timeline Slider with Cursor Counter */}
             <div className="space-y-1.5">
               <div className="flex justify-between text-xs text-slate-400">
@@ -405,9 +405,9 @@ export function App() {
         </section>
 
         {/* Right Column: Deep Inspection Panel */}
-        <aside className="lg:col-span-5 xl:col-span-4 bg-slate-900/60 backdrop-blur border-l border-slate-800/80 flex flex-col h-full">
+        <aside className="lg:col-span-5 xl:col-span-4 bg-slate-900/60 backdrop-blur border-l border-slate-800/80 flex flex-col h-full min-h-0 overflow-hidden">
           {/* Navigation Tabs */}
-          <div className="flex items-center border-b border-slate-800/80 px-4 pt-3 gap-2">
+          <div className="flex-shrink-0 flex items-center border-b border-slate-800/80 px-4 pt-3 gap-2">
             <button
               onClick={() => setActiveTab("inspector")}
               className={`flex items-center gap-2 px-3 py-2 text-xs font-medium border-b-2 transition-all ${
@@ -458,7 +458,7 @@ export function App() {
           </div>
 
           {/* Tab Content Body */}
-          <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-4">
             {activeTab === "inspector" && inspectedNode && (
               <div className="space-y-4">
                 {/* Node Selector Pills */}
