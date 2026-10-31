@@ -14,7 +14,7 @@ export interface RaftSimAPI {
 declare global {
   interface Window {
     RaftSim?: RaftSimAPI;
-    Go?: any;
+    Go?: unknown;
   }
 }
 

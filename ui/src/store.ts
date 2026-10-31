@@ -208,7 +208,7 @@ export const useClusterStore = create<TraceStore>((set, get) => {
 
     sendCommand: (cmd: Command) => {
       const sim = getSim();
-      let err = "";
+      let err: string;
       if (!get().isLive) err = "Start a live session first.";
       else if (!sim) err = "The simulator (sim.wasm) has not loaded yet.";
       else err = sim.sendCommand(JSON.stringify(cmd)) ?? "";

@@ -20,8 +20,8 @@ const nodeEv = (t: number, from: number, extra: object = {}) =>
 const tick = () => Promise.resolve();
 
 beforeEach(() => {
-  (globalThis as any).window = globalThis;
-  delete (globalThis as any).RaftSim;
+  (globalThis as unknown as { window: unknown }).window = globalThis;
+  delete (globalThis as unknown as { RaftSim?: unknown }).RaftSim;
 });
 
 describe("live session", () => {
