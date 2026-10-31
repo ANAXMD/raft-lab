@@ -1,75 +1,27 @@
-# React + TypeScript + Vite
+# raft-lab visualizer
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React + TypeScript + Vite front end for [raft-lab](../README.md). It renders a Raft cluster from an
+event stream, either a recorded NDJSON trace or a live simulation running in WebAssembly.
 
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```bash
+npm ci
+npm run build:wasm   # needs Go; writes public/sim.wasm and public/wasm_exec.js
+npm run dev          # http://localhost:5173/raft-lab/
+npm test             # reducer, replay and store tests (the reducer is checked against the Go golden trace)
+npm run lint
+npm run build
 ```
 
-You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
+## How it fits together
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+| File | Role |
+|---|---|
+| `src/reducer.ts` | Pure `reduce(state, event)`: events in, cluster view state out (nodes, in-flight messages, cut links, network settings). |
+| `src/replay.ts` | Seeking = folding events from the start; cached checkpoints every 256 events keep scrubbing cheap. |
+| `src/store.ts` | Zustand store: trace playback, live session, commands, session export and replay. Live events are batched into one update per burst. |
+| `src/components/ClusterRing.tsx` | The SVG ring: roles, packets, dashed red cut links. |
+| `src/components/LiveControls.tsx` | Write data, network loss and delay, partitions, speed, session download. |
+| `public/sim.wasm` | The Go simulator (`../cmd/wasm`), exposing a `RaftSim` global. |
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
-```
+Because the reducer is pure and the simulator is deterministic, the same session always renders the
+same states, and the UI can jump to any point in time without re-running anything.
