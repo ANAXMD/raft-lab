@@ -1,5 +1,7 @@
 # raft-lab
 
+[![CI](https://github.com/ANAXMD/raft-lab/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ANAXMD/raft-lab/actions/workflows/ci.yml)
+
 **Raft consensus from scratch in Go, built on a deterministic simulator, with a browser visualizer you can break.**
 
 [**▶ Live demo**](https://anaxmd.github.io/raft-lab/) · runs the real Go code in your browser via WebAssembly
@@ -116,3 +118,5 @@ stamped with the virtual time at which it took effect. The wire contract is docu
 - **No leader leases.** PreVote and CheckQuorum make disruption rare, but a healthy cluster can still be disturbed under unlucky timings.
 - **No client request deduplication.** A retried write can be applied twice.
 - The visualizer keeps every event of a live run in memory, so very long sessions will grow; speed is capped at 5× for that reason.
+
+*See also: [durable-engine](https://github.com/ANAXMD/durable-engine), a Postgres-backed workflow engine.*
