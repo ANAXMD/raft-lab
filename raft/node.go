@@ -518,10 +518,12 @@ func (n *raftNode) Propose(data []byte) bool {
 	if n.role != Leader {
 		return false
 	}
+	// The node owns its log: copy the caller's buffer so later writes by the
+	// caller cannot change entries already logged, persisted or sent.
 	n.appendLocal(Entry{
 		Term:  n.hs.Term,
 		Index: n.lastIndex() + 1,
-		Data:  data,
+		Data:  append([]byte(nil), data...),
 	})
 	n.matchIndex[n.cfg.ID] = n.lastIndex()
 	if len(n.cfg.Peers) == 1 {
