@@ -29,6 +29,7 @@ type raftNode struct {
 	matchIndex map[NodeID]Index // Highest log entry known to be replicated on peer
 	nextIndex  map[NodeID]Index // Next log entry to send to peer
 	progress   map[NodeID]*Progress
+	member     map[NodeID]bool // cluster membership, from cfg.Peers
 	// Ready bookkeeping.
 	hsDirty   bool
 	dirtyFrom Index // lowest log index modified since the last Advance (0 = clean)
@@ -46,9 +47,11 @@ func New(cfg Config, p Persisted) Node {
 		matchIndex: make(map[NodeID]Index),
 		nextIndex:  make(map[NodeID]Index),
 		progress:   make(map[NodeID]*Progress),
+		member:     make(map[NodeID]bool),
 	}
 	for _, peer := range cfg.Peers {
 		n.progress[peer] = &Progress{}
+		n.member[peer] = true
 	}
 	n.becomeFollower(n.hs.Term, 0)
 	return n
@@ -317,8 +320,33 @@ func (n *raftNode) becomeLeader() {
 	n.bcastAppend()
 }
 
+// acceptable reports whether a network message may influence this node at all.
+// Input from the network is untrusted: it is dropped, with no state change and
+// no reply, if the sender is not another member of the cluster, or if an
+// AppendEntries is structurally impossible (entries must be non-empty-indexed
+// and consecutive, starting right after PrevLogIndex). A correct leader never
+// produces such a message, so dropping loses nothing.
+func (n *raftNode) acceptable(m Message) bool {
+	if m.From == n.cfg.ID || !n.member[m.From] {
+		return false
+	}
+	if m.Type == MsgApp {
+		next := m.PrevLogIndex + 1
+		for _, e := range m.Entries {
+			if e.Index == 0 || e.Index != next {
+				return false
+			}
+			next++
+		}
+	}
+	return true
+}
+
 // Step processes one incoming message.
 func (n *raftNode) Step(m Message) {
+	if !n.acceptable(m) {
+		return
+	}
 	// A rejected PreVote from a node in a higher term means we are behind: catch up.
 	if m.Type == MsgPreVoteResp && m.Reject && m.Term > n.hs.Term {
 		n.becomeFollower(m.Term, 0)
