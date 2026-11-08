@@ -1,4 +1,6 @@
-# M0 node-level test report (baseline, before any fix)
+# M0 node-level test report
+
+Baseline results below are from the unmodified implementation. After the fix commits on branch `m0-hardening` every test N01-N14 passes (`go test ./raft ./sim -race`). Fix commits: see `git log`.
 
 Run against the unmodified `raft/node.go` (sha256 55844b4a...eaf1) and `raft/types.go` (cc9e5eec...d957).
 Tests use only `raft.New`, `Tick`, `Step`, `Propose`, `Ready`, `Advance`, `Status`, `Log`. No simulator.
@@ -13,12 +15,12 @@ Run: `make test-node` (N07-N12 are EXPECTED to fail until fixed), `make mutation
 | N04 | Figure8_PreviousTermNotCommittedByCounting | A leader never commits an earlier-term entry by counting replicas | PASS | Regression guard (Raft Figure 8) |
 | N05 | RejectHintBoundsAndDuplicateRejects | Reject hints stay in range and duplicate rejects don't corrupt progress | PASS | F7 (coarse RejectHint): hint is in bounds; performance of hint not asserted |
 | N06 | VotePersistedWithReplyAndSingleVotePerTerm | A vote is in HardState in the same Ready as the grant; one vote per term | PASS | Regression guard (vote safety). Extended after mutation M4 survived |
-| N07 | AppendBytesBoundedAndLaggingFollowerCatchesUp | No AppendEntries exceeds the byte budget, and a follower still catches up from a larger backlog | FAIL | F1 (unbounded MsgApp) |
-| N08 | HealthyLeaderSurvivesOneWayPartition | A healthy leader is not deposed by a node that cannot hear it; a real leader crash still elects | FAIL (control passes) | F2 (no leader lease on (Pre)Vote) |
-| N09 | MalformedMessagesDoNotPanicOrMutate | Bad network input neither panics nor changes state or output | FAIL | F4 (untrusted indexes / unknown senders) |
-| N10 | ProposeCopiesCallerBuffer | The node owns proposal bytes; mutating the caller's buffer changes nothing | FAIL | F5 (Propose aliasing) |
-| N11 | InputBetweenReadyAndAdvanceIsNeverLost | Nothing produced between Ready and Advance is silently dropped | FAIL | F3 (Advance clears all dirty state) |
-| N12 | NewRejectsBadConfigAndLog | `raft.New` rejects invalid Config and persisted logs with a descriptive panic | FAIL | F6 (no validation) |
+| N07 | AppendBytesBoundedAndLaggingFollowerCatchesUp | No AppendEntries exceeds the byte budget, and a follower still catches up from a larger backlog | FAIL -> fixed | F1 (unbounded MsgApp) |
+| N08 | HealthyLeaderSurvivesOneWayPartition | A healthy leader is not deposed by a node that cannot hear it; a real leader crash still elects | FAIL (control passes); fixed | F2 (no leader lease on (Pre)Vote) |
+| N09 | MalformedMessagesDoNotPanicOrMutate | Bad network input neither panics nor changes state or output | FAIL -> fixed | F4 (untrusted indexes / unknown senders) |
+| N10 | ProposeCopiesCallerBuffer | The node owns proposal bytes; mutating the caller's buffer changes nothing | FAIL -> fixed | F5 (Propose aliasing) |
+| N11 | InputBetweenReadyAndAdvanceIsNeverLost | Nothing produced between Ready and Advance is silently dropped | FAIL -> fixed | F3 (Advance clears all dirty state) |
+| N12 | NewRejectsBadConfigAndLog | `raft.New` rejects invalid Config and persisted logs with a descriptive panic | FAIL -> fixed | F6 (no validation) |
 | N13 | RestartRedeliversLogExactlyOnceInOrder | After restart every entry is applied once, in order | PASS | F10 (restart state) |
 | N14 | Mutation check (scripts/mutation.py) | The guard tests actually detect 4 deliberate bugs | PASS (4/4 caught) | Test quality |
 
