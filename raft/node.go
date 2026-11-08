@@ -37,8 +37,62 @@ type raftNode struct {
 	readyAt   Index // commit index captured by the last Ready(), applied on Advance
 }
 
+// validate panics with a descriptive message if the configuration or the
+// persisted state cannot describe a working node. Starting a node on bad input
+// would give it wrong quorums, a crashing timer or a corrupt log, so New refuses
+// instead of continuing.
+func validate(cfg Config, p Persisted) {
+	if cfg.ID == 0 {
+		panic("raft: invalid config: ID must not be 0 (0 means none)")
+	}
+	if cfg.Rand == nil {
+		panic("raft: invalid config: Rand must not be nil")
+	}
+	if cfg.ElectionTicks <= 0 {
+		panic("raft: invalid config: ElectionTicks must be positive")
+	}
+	if cfg.HeartbeatTicks <= 0 {
+		panic("raft: invalid config: HeartbeatTicks must be positive")
+	}
+	if cfg.HeartbeatTicks >= cfg.ElectionTicks {
+		panic("raft: invalid config: HeartbeatTicks must be less than ElectionTicks")
+	}
+	if len(cfg.Peers) == 0 {
+		panic("raft: invalid config: Peers must not be empty")
+	}
+	seen := make(map[NodeID]bool, len(cfg.Peers))
+	for _, id := range cfg.Peers {
+		if id == 0 {
+			panic("raft: invalid config: Peers contains node ID 0")
+		}
+		if seen[id] {
+			panic("raft: invalid config: Peers contains a duplicate ID")
+		}
+		seen[id] = true
+	}
+	if !seen[cfg.ID] {
+		panic("raft: invalid config: Peers must contain the node's own ID")
+	}
+
+	var prev Term
+	for i, e := range p.Log {
+		if e.Index != Index(i+1) {
+			panic("raft: invalid persisted log: entries must be consecutive starting at index 1")
+		}
+		if e.Term < prev {
+			panic("raft: invalid persisted log: entry terms must not decrease")
+		}
+		if e.Term > p.HardState.Term {
+			panic("raft: invalid persisted state: a log entry has a term above the persisted current term")
+		}
+		prev = e.Term
+	}
+}
+
 // New restores a node from persisted state. Always starts as a Follower.
+// It panics with a descriptive message on an invalid Config or Persisted.
 func New(cfg Config, p Persisted) Node {
+	validate(cfg, p)
 	n := &raftNode{
 		cfg:        cfg,
 		hs:         p.HardState,
