@@ -35,6 +35,15 @@ type raftNode struct {
 	dirtyFrom Index // lowest log index modified since the last Advance (0 = clean)
 	msgs      []Message
 	readyAt   Index // commit index captured by the last Ready(), applied on Advance
+
+	// What the last Ready() handed out, so Advance() clears exactly that and
+	// nothing produced after it (see Ready and Advance).
+	rdOut        bool      // a Ready has been returned and not yet advanced
+	rdHSValid    bool      // that Ready carried a HardState...
+	rdHS         HardState // ...with this value
+	rdMsgs       int       // number of queued messages it carried
+	rdLast       Index     // log length when it was taken
+	appendedFrom Index     // lowest log index modified since it was taken (0 = none)
 }
 
 // validate panics with a descriptive message if the configuration or the
@@ -151,6 +160,9 @@ func (n *raftNode) appendLocal(ents ...Entry) {
 	if n.dirtyFrom == 0 || first < n.dirtyFrom {
 		n.dirtyFrom = first
 	}
+	if n.appendedFrom == 0 || first < n.appendedFrom {
+		n.appendedFrom = first
+	}
 }
 
 func (n *raftNode) setHardState(term Term, votedFor NodeID) {
@@ -188,30 +200,63 @@ func (n *raftNode) Status() Status {
 
 func (n *raftNode) Log() []Entry { return append([]Entry(nil), n.log...) }
 
+// Ready returns everything that must be persisted, sent and applied. It is
+// idempotent until Advance: calling it again returns the same batch plus
+// anything produced in between. It records exactly what it handed out so that
+// Advance can acknowledge that and nothing else.
 func (n *raftNode) Ready() (Ready, bool) {
 	var rd Ready
+	n.rdHSValid = false
 	if n.hsDirty {
 		hs := n.hs
 		rd.HardState = &hs
+		n.rdHSValid, n.rdHS = true, hs
 	}
 	if n.dirtyFrom != 0 {
 		rd.Entries = append([]Entry(nil), n.log[n.dirtyFrom-1:]...)
 	}
-	rd.Messages = n.msgs
+	rd.Messages = append([]Message(nil), n.msgs...)
+	n.rdMsgs = len(n.msgs)
+	n.rdLast = n.lastIndex()
+	n.appendedFrom = 0
 	if n.commit > n.applied {
 		rd.Committed = append([]Entry(nil), n.log[n.applied:n.commit]...)
 		n.readyAt = n.commit
 	}
 	if rd.Empty() {
+		n.rdOut = false
 		return Ready{}, false
 	}
+	n.rdOut = true
 	return rd, true
 }
 
+// Advance acknowledges the last Ready: the driver has persisted, sent and
+// applied it. It clears only what that Ready returned. Anything produced after
+// the Ready (a term or vote change, appended entries, queued messages) stays
+// pending and is returned by the next Ready, so input can never silently
+// disappear. An Advance with no outstanding Ready does nothing.
 func (n *raftNode) Advance() {
-	n.hsDirty = false
-	n.dirtyFrom = 0
-	n.msgs = nil
+	if !n.rdOut {
+		return
+	}
+	n.rdOut = false
+
+	if n.rdHSValid && n.hs == n.rdHS {
+		n.hsDirty = false
+	}
+	if n.appendedFrom == 0 {
+		n.dirtyFrom = 0
+	} else {
+		// Entries changed after the Ready. Everything before the lowest changed
+		// index (or before the first entry the Ready never saw) is persisted.
+		n.dirtyFrom = n.appendedFrom
+		if n.rdLast+1 < n.dirtyFrom {
+			n.dirtyFrom = n.rdLast + 1
+		}
+	}
+	n.appendedFrom = 0
+	n.msgs = append([]Message(nil), n.msgs[n.rdMsgs:]...)
 	if n.readyAt > n.applied {
 		n.applied = n.readyAt
 	}
