@@ -444,9 +444,30 @@ func (n *raftNode) acceptable(m Message) bool {
 	return true
 }
 
+// inLease reports whether this node has recently heard from a live leader. A
+// follower counts time since the last AppendEntries; a leader only has a
+// meaningful clock when CheckQuorum is on (it resets each quorum check).
+func (n *raftNode) inLease() bool {
+	if n.leader == 0 || n.electionElapsed >= n.cfg.ElectionTicks {
+		return false
+	}
+	if n.role == Leader {
+		return n.cfg.CheckQuorum
+	}
+	return true
+}
+
 // Step processes one incoming message.
 func (n *raftNode) Step(m Message) {
 	if !n.acceptable(m) {
+		return
+	}
+	// Leader lease: a node that has heard from a live leader within the minimum
+	// election timeout ignores PreVote and Vote requests for a higher term,
+	// without adopting that term. This stops a node that can send but not hear
+	// (a one-way partition) from deposing a healthy leader. Once the leader has
+	// been silent for ElectionTicks the lease is over and elections proceed.
+	if (m.Type == MsgVote || m.Type == MsgPreVote) && m.Term > n.hs.Term && n.inLease() {
 		return
 	}
 	// A rejected PreVote from a node in a higher term means we are behind: catch up.
