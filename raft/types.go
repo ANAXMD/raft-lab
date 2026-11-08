@@ -140,7 +140,16 @@ type Config struct {
 	PreVote        bool
 	CheckQuorum    bool
 	Rand           Rand
+
+	// MaxAppendBytes bounds the entry bytes (payload plus a small fixed
+	// per-entry overhead) in one AppendEntries message. A single entry larger
+	// than the bound is still sent alone, so replication always progresses.
+	// 0 means DefaultMaxAppendBytes; negative is invalid.
+	MaxAppendBytes int
 }
+
+// DefaultMaxAppendBytes is used when Config.MaxAppendBytes is 0.
+const DefaultMaxAppendBytes = 1 << 20
 
 // Rand is the only randomness a node may use.
 type Rand interface {

@@ -63,6 +63,9 @@ func validate(cfg Config, p Persisted) {
 	if cfg.HeartbeatTicks <= 0 {
 		panic("raft: invalid config: HeartbeatTicks must be positive")
 	}
+	if cfg.MaxAppendBytes < 0 {
+		panic("raft: invalid config: MaxAppendBytes must not be negative")
+	}
 	if cfg.HeartbeatTicks >= cfg.ElectionTicks {
 		panic("raft: invalid config: HeartbeatTicks must be less than ElectionTicks")
 	}
@@ -607,7 +610,14 @@ func (n *raftNode) Step(m Message) {
 			if m.MatchIndex+1 > n.nextIndex[m.From] {
 				n.nextIndex[m.From] = m.MatchIndex + 1
 			}
+			before := n.commit
 			n.advanceCommit()
+			// Replication is paged by MaxAppendBytes. A commit advance already
+			// re-broadcasts; if it did not, send this follower its next batch now
+			// instead of making it wait one heartbeat per batch.
+			if n.commit == before && n.nextIndex[m.From] <= n.lastIndex() {
+				n.sendAppend(m.From)
+			}
 		}
 	}
 }
@@ -642,7 +652,7 @@ func (n *raftNode) sendAppend(to NodeID) {
 
 	var ents []Entry
 	if ni <= n.lastIndex() {
-		ents = append([]Entry(nil), n.log[ni-1:]...)
+		ents = append([]Entry(nil), n.log[ni-1:ni-1+Index(n.batchLen(ni))]...)
 	}
 
 	n.send(Message{
@@ -654,6 +664,30 @@ func (n *raftNode) sendAppend(to NodeID) {
 		Entries:      ents,
 		LeaderCommit: n.commit,
 	})
+}
+
+// entryOverhead is the fixed cost counted per entry against MaxAppendBytes, so
+// that a long run of empty entries is bounded too.
+const entryOverhead = 24
+
+// batchLen returns how many entries starting at index from fit in one
+// AppendEntries message: as many as fit in MaxAppendBytes, but always at least
+// one (so an oversized entry is still sent, alone). Requires from <= lastIndex.
+func (n *raftNode) batchLen(from Index) int {
+	budget := n.cfg.MaxAppendBytes
+	if budget == 0 {
+		budget = DefaultMaxAppendBytes
+	}
+	used, count := 0, 0
+	for i := int(from); i <= len(n.log); i++ {
+		cost := len(n.log[i-1].Data) + entryOverhead
+		if count > 0 && used+cost > budget {
+			break
+		}
+		used += cost
+		count++
+	}
+	return count
 }
 
 func (n *raftNode) bcastAppend() {
