@@ -29,15 +29,82 @@ type raftNode struct {
 	matchIndex map[NodeID]Index // Highest log entry known to be replicated on peer
 	nextIndex  map[NodeID]Index // Next log entry to send to peer
 	progress   map[NodeID]*Progress
+	member     map[NodeID]bool // cluster membership, from cfg.Peers
 	// Ready bookkeeping.
 	hsDirty   bool
 	dirtyFrom Index // lowest log index modified since the last Advance (0 = clean)
 	msgs      []Message
 	readyAt   Index // commit index captured by the last Ready(), applied on Advance
+
+	// What the last Ready() handed out, so Advance() clears exactly that and
+	// nothing produced after it (see Ready and Advance).
+	rdOut        bool      // a Ready has been returned and not yet advanced
+	rdHSValid    bool      // that Ready carried a HardState...
+	rdHS         HardState // ...with this value
+	rdMsgs       int       // number of queued messages it carried
+	rdLast       Index     // log length when it was taken
+	appendedFrom Index     // lowest log index modified since it was taken (0 = none)
+}
+
+// validate panics with a descriptive message if the configuration or the
+// persisted state cannot describe a working node. Starting a node on bad input
+// would give it wrong quorums, a crashing timer or a corrupt log, so New refuses
+// instead of continuing.
+func validate(cfg Config, p Persisted) {
+	if cfg.ID == 0 {
+		panic("raft: invalid config: ID must not be 0 (0 means none)")
+	}
+	if cfg.Rand == nil {
+		panic("raft: invalid config: Rand must not be nil")
+	}
+	if cfg.ElectionTicks <= 0 {
+		panic("raft: invalid config: ElectionTicks must be positive")
+	}
+	if cfg.HeartbeatTicks <= 0 {
+		panic("raft: invalid config: HeartbeatTicks must be positive")
+	}
+	if cfg.MaxAppendBytes < 0 {
+		panic("raft: invalid config: MaxAppendBytes must not be negative")
+	}
+	if cfg.HeartbeatTicks >= cfg.ElectionTicks {
+		panic("raft: invalid config: HeartbeatTicks must be less than ElectionTicks")
+	}
+	if len(cfg.Peers) == 0 {
+		panic("raft: invalid config: Peers must not be empty")
+	}
+	seen := make(map[NodeID]bool, len(cfg.Peers))
+	for _, id := range cfg.Peers {
+		if id == 0 {
+			panic("raft: invalid config: Peers contains node ID 0")
+		}
+		if seen[id] {
+			panic("raft: invalid config: Peers contains a duplicate ID")
+		}
+		seen[id] = true
+	}
+	if !seen[cfg.ID] {
+		panic("raft: invalid config: Peers must contain the node's own ID")
+	}
+
+	var prev Term
+	for i, e := range p.Log {
+		if e.Index != Index(i+1) {
+			panic("raft: invalid persisted log: entries must be consecutive starting at index 1")
+		}
+		if e.Term < prev {
+			panic("raft: invalid persisted log: entry terms must not decrease")
+		}
+		if e.Term > p.HardState.Term {
+			panic("raft: invalid persisted state: a log entry has a term above the persisted current term")
+		}
+		prev = e.Term
+	}
 }
 
 // New restores a node from persisted state. Always starts as a Follower.
+// It panics with a descriptive message on an invalid Config or Persisted.
 func New(cfg Config, p Persisted) Node {
+	validate(cfg, p)
 	n := &raftNode{
 		cfg:        cfg,
 		hs:         p.HardState,
@@ -46,9 +113,11 @@ func New(cfg Config, p Persisted) Node {
 		matchIndex: make(map[NodeID]Index),
 		nextIndex:  make(map[NodeID]Index),
 		progress:   make(map[NodeID]*Progress),
+		member:     make(map[NodeID]bool),
 	}
 	for _, peer := range cfg.Peers {
 		n.progress[peer] = &Progress{}
+		n.member[peer] = true
 	}
 	n.becomeFollower(n.hs.Term, 0)
 	return n
@@ -94,6 +163,9 @@ func (n *raftNode) appendLocal(ents ...Entry) {
 	if n.dirtyFrom == 0 || first < n.dirtyFrom {
 		n.dirtyFrom = first
 	}
+	if n.appendedFrom == 0 || first < n.appendedFrom {
+		n.appendedFrom = first
+	}
 }
 
 func (n *raftNode) setHardState(term Term, votedFor NodeID) {
@@ -131,30 +203,63 @@ func (n *raftNode) Status() Status {
 
 func (n *raftNode) Log() []Entry { return append([]Entry(nil), n.log...) }
 
+// Ready returns everything that must be persisted, sent and applied. It is
+// idempotent until Advance: calling it again returns the same batch plus
+// anything produced in between. It records exactly what it handed out so that
+// Advance can acknowledge that and nothing else.
 func (n *raftNode) Ready() (Ready, bool) {
 	var rd Ready
+	n.rdHSValid = false
 	if n.hsDirty {
 		hs := n.hs
 		rd.HardState = &hs
+		n.rdHSValid, n.rdHS = true, hs
 	}
 	if n.dirtyFrom != 0 {
 		rd.Entries = append([]Entry(nil), n.log[n.dirtyFrom-1:]...)
 	}
-	rd.Messages = n.msgs
+	rd.Messages = append([]Message(nil), n.msgs...)
+	n.rdMsgs = len(n.msgs)
+	n.rdLast = n.lastIndex()
+	n.appendedFrom = 0
 	if n.commit > n.applied {
 		rd.Committed = append([]Entry(nil), n.log[n.applied:n.commit]...)
 		n.readyAt = n.commit
 	}
 	if rd.Empty() {
+		n.rdOut = false
 		return Ready{}, false
 	}
+	n.rdOut = true
 	return rd, true
 }
 
+// Advance acknowledges the last Ready: the driver has persisted, sent and
+// applied it. It clears only what that Ready returned. Anything produced after
+// the Ready (a term or vote change, appended entries, queued messages) stays
+// pending and is returned by the next Ready, so input can never silently
+// disappear. An Advance with no outstanding Ready does nothing.
 func (n *raftNode) Advance() {
-	n.hsDirty = false
-	n.dirtyFrom = 0
-	n.msgs = nil
+	if !n.rdOut {
+		return
+	}
+	n.rdOut = false
+
+	if n.rdHSValid && n.hs == n.rdHS {
+		n.hsDirty = false
+	}
+	if n.appendedFrom == 0 {
+		n.dirtyFrom = 0
+	} else {
+		// Entries changed after the Ready. Everything before the lowest changed
+		// index (or before the first entry the Ready never saw) is persisted.
+		n.dirtyFrom = n.appendedFrom
+		if n.rdLast+1 < n.dirtyFrom {
+			n.dirtyFrom = n.rdLast + 1
+		}
+	}
+	n.appendedFrom = 0
+	n.msgs = append([]Message(nil), n.msgs[n.rdMsgs:]...)
 	if n.readyAt > n.applied {
 		n.applied = n.readyAt
 	}
@@ -317,8 +422,61 @@ func (n *raftNode) becomeLeader() {
 	n.bcastAppend()
 }
 
+// acceptable reports whether a network message may influence this node at all.
+// Input from the network is untrusted: it is dropped, with no state change and
+// no reply, if the sender is not another member of the cluster, or if an
+// AppendEntries is structurally impossible (entries must be non-empty-indexed
+// and consecutive, starting right after PrevLogIndex). A correct leader never
+// produces such a message, so dropping loses nothing.
+func (n *raftNode) acceptable(m Message) bool {
+	if m.From == n.cfg.ID || !n.member[m.From] {
+		return false
+	}
+	if m.Type == MsgApp {
+		next := m.PrevLogIndex + 1
+		for _, e := range m.Entries {
+			if e.Index == 0 || e.Index != next {
+				return false
+			}
+			next++
+		}
+	}
+	return true
+}
+
+// inLease reports whether this node is protected by a leader lease, i.e. should
+// ignore higher-term PreVote and Vote requests.
+//
+//   - Follower (or any non-leader): it has heard from the current leader less
+//     than ElectionTicks ago.
+//   - Leader: for as long as it is leader, when CheckQuorum is on. The leader's
+//     own clock cannot be used here: it is reset every electionTimeout, which is
+//     randomized in [ElectionTicks, 2*ElectionTicks), so comparing it with
+//     ElectionTicks would leave the leader out of lease for part of every cycle
+//     and let it grant votes then. With CheckQuorum a leader that has lost its
+//     quorum steps down by itself within one electionTimeout, which ends its
+//     lease; without CheckQuorum it could never notice isolation, so it holds no
+//     lease and must hear a higher term.
+func (n *raftNode) inLease() bool {
+	if n.role == Leader {
+		return n.cfg.CheckQuorum
+	}
+	return n.leader != 0 && n.electionElapsed < n.cfg.ElectionTicks
+}
+
 // Step processes one incoming message.
 func (n *raftNode) Step(m Message) {
+	if !n.acceptable(m) {
+		return
+	}
+	// Leader lease: a node that has heard from a live leader within the minimum
+	// election timeout ignores PreVote and Vote requests for a higher term,
+	// without adopting that term. This stops a node that can send but not hear
+	// (a one-way partition) from deposing a healthy leader. Once the leader has
+	// been silent for ElectionTicks the lease is over and elections proceed.
+	if (m.Type == MsgVote || m.Type == MsgPreVote) && m.Term > n.hs.Term && n.inLease() {
+		return
+	}
 	// A rejected PreVote from a node in a higher term means we are behind: catch up.
 	if m.Type == MsgPreVoteResp && m.Reject && m.Term > n.hs.Term {
 		n.becomeFollower(m.Term, 0)
@@ -480,7 +638,14 @@ func (n *raftNode) Step(m Message) {
 			if m.MatchIndex+1 > n.nextIndex[m.From] {
 				n.nextIndex[m.From] = m.MatchIndex + 1
 			}
+			before := n.commit
 			n.advanceCommit()
+			// Replication is paged by MaxAppendBytes. A commit advance already
+			// re-broadcasts; if it did not, send this follower its next batch now
+			// instead of making it wait one heartbeat per batch.
+			if n.commit == before && n.nextIndex[m.From] <= n.lastIndex() {
+				n.sendAppend(m.From)
+			}
 		}
 	}
 }
@@ -490,10 +655,12 @@ func (n *raftNode) Propose(data []byte) bool {
 	if n.role != Leader {
 		return false
 	}
+	// The node owns its log: copy the caller's buffer so later writes by the
+	// caller cannot change entries already logged, persisted or sent.
 	n.appendLocal(Entry{
 		Term:  n.hs.Term,
 		Index: n.lastIndex() + 1,
-		Data:  data,
+		Data:  append([]byte(nil), data...),
 	})
 	n.matchIndex[n.cfg.ID] = n.lastIndex()
 	if len(n.cfg.Peers) == 1 {
@@ -513,7 +680,7 @@ func (n *raftNode) sendAppend(to NodeID) {
 
 	var ents []Entry
 	if ni <= n.lastIndex() {
-		ents = append([]Entry(nil), n.log[ni-1:]...)
+		ents = append([]Entry(nil), n.log[ni-1:ni-1+Index(n.batchLen(ni))]...)
 	}
 
 	n.send(Message{
@@ -525,6 +692,30 @@ func (n *raftNode) sendAppend(to NodeID) {
 		Entries:      ents,
 		LeaderCommit: n.commit,
 	})
+}
+
+// entryOverhead is the fixed cost counted per entry against MaxAppendBytes, so
+// that a long run of empty entries is bounded too.
+const entryOverhead = 24
+
+// batchLen returns how many entries starting at index from fit in one
+// AppendEntries message: as many as fit in MaxAppendBytes, but always at least
+// one (so an oversized entry is still sent, alone). Requires from <= lastIndex.
+func (n *raftNode) batchLen(from Index) int {
+	budget := n.cfg.MaxAppendBytes
+	if budget == 0 {
+		budget = DefaultMaxAppendBytes
+	}
+	used, count := 0, 0
+	for i := int(from); i <= len(n.log); i++ {
+		cost := len(n.log[i-1].Data) + entryOverhead
+		if count > 0 && used+cost > budget {
+			break
+		}
+		used += cost
+		count++
+	}
+	return count
 }
 
 func (n *raftNode) bcastAppend() {

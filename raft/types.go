@@ -140,7 +140,27 @@ type Config struct {
 	PreVote        bool
 	CheckQuorum    bool
 	Rand           Rand
+
+	// MaxAppendBytes bounds the entry bytes (payload plus a small fixed
+	// per-entry overhead) in one AppendEntries message. A single entry larger
+	// than the bound is still sent alone, so replication always progresses.
+	// 0 means DefaultMaxAppendBytes; negative is invalid.
+	MaxAppendBytes int
 }
+
+// DisruptionProtected reports whether this configuration protects a healthy
+// leader from disruption by an isolated or one-way-partitioned node. It needs
+// both options. PreVote stops such a node from inflating its term, which would
+// otherwise depose the leader as soon as the partition heals (the leader sees a
+// higher term in the reply to its heartbeat). CheckQuorum gives the leader a lease
+// and makes it step down when it loses its quorum. The leader lease on its own
+// (CheckQuorum without PreVote) only blocks the votes; it does not stop the term
+// inflation. A system that relies on stable leadership must refuse to start when
+// this is false instead of running unprotected without notice.
+func (c Config) DisruptionProtected() bool { return c.PreVote && c.CheckQuorum }
+
+// DefaultMaxAppendBytes is used when Config.MaxAppendBytes is 0.
+const DefaultMaxAppendBytes = 1 << 20
 
 // Rand is the only randomness a node may use.
 type Rand interface {
