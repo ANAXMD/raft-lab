@@ -23,6 +23,8 @@ Run: `make test-node` (N07-N12 are EXPECTED to fail until fixed), `make mutation
 | N12 | NewRejectsBadConfigAndLog | `raft.New` rejects invalid Config and persisted logs with a descriptive panic | FAIL -> fixed | F6 (no validation) |
 | N13 | RestartRedeliversLogExactlyOnceInOrder | After restart every entry is applied once, in order | PASS | F10 (restart state) |
 | N14 | Mutation check (scripts/mutation.py) | The guard tests actually detect 4 deliberate bugs | PASS (4/4 caught) | Test quality |
+| N15 | LeaderStaysInLeaseWhileCheckQuorum | A leader with CheckQuorum is in lease for its whole term, so heartbeats dropped to one node with votes working cannot depose it; a leader crash still elects | FAIL -> fixed | F2 follow-up (found in review: leader lease had a gap with randomized timeouts) |
+| N16 | DisruptionProtectionNeedsPreVoteAndCheckQuorum | `Config.DisruptionProtected()` is true only with PreVote and CheckQuorum; each half is shown to be needed | PASS | F2 configuration guard |
 
 ## Failure evidence
 

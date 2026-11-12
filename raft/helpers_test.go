@@ -207,14 +207,15 @@ func electLeader(t *testing.T, id raft.NodeID, peers []raft.NodeID, p raft.Persi
 // ---------------------------------------------------------------------------
 
 type cluster struct {
-	t       *testing.T
-	ids     []raft.NodeID
-	nodes   map[raft.NodeID]raft.Node
-	plen    map[raft.NodeID]raft.Index // length of the log as handed to persistence
-	down    map[raft.NodeID]bool
-	block   func(from, to raft.NodeID) bool // true = drop this directed link
-	queue   []raft.Message
-	inspect func(m raft.Message) // sees every message at send time
+	t        *testing.T
+	ids      []raft.NodeID
+	nodes    map[raft.NodeID]raft.Node
+	plen     map[raft.NodeID]raft.Index // length of the log as handed to persistence
+	down     map[raft.NodeID]bool
+	block    func(from, to raft.NodeID) bool // true = drop this directed link
+	blockMsg func(m raft.Message) bool       // true = drop this particular message (by type, direction, ...)
+	queue    []raft.Message
+	inspect  func(m raft.Message) // sees every message at send time
 }
 
 func newCluster(t *testing.T, ids []raft.NodeID, mk func(id raft.NodeID) (raft.Config, raft.Persisted)) *cluster {
@@ -287,6 +288,9 @@ func (c *cluster) settle(max int) {
 			continue
 		}
 		if c.block != nil && c.block(m.From, m.To) {
+			continue
+		}
+		if c.blockMsg != nil && c.blockMsg(m) {
 			continue
 		}
 		dst.Step(m)

@@ -444,17 +444,24 @@ func (n *raftNode) acceptable(m Message) bool {
 	return true
 }
 
-// inLease reports whether this node has recently heard from a live leader. A
-// follower counts time since the last AppendEntries; a leader only has a
-// meaningful clock when CheckQuorum is on (it resets each quorum check).
+// inLease reports whether this node is protected by a leader lease, i.e. should
+// ignore higher-term PreVote and Vote requests.
+//
+//   - Follower (or any non-leader): it has heard from the current leader less
+//     than ElectionTicks ago.
+//   - Leader: for as long as it is leader, when CheckQuorum is on. The leader's
+//     own clock cannot be used here: it is reset every electionTimeout, which is
+//     randomized in [ElectionTicks, 2*ElectionTicks), so comparing it with
+//     ElectionTicks would leave the leader out of lease for part of every cycle
+//     and let it grant votes then. With CheckQuorum a leader that has lost its
+//     quorum steps down by itself within one electionTimeout, which ends its
+//     lease; without CheckQuorum it could never notice isolation, so it holds no
+//     lease and must hear a higher term.
 func (n *raftNode) inLease() bool {
-	if n.leader == 0 || n.electionElapsed >= n.cfg.ElectionTicks {
-		return false
-	}
 	if n.role == Leader {
 		return n.cfg.CheckQuorum
 	}
-	return true
+	return n.leader != 0 && n.electionElapsed < n.cfg.ElectionTicks
 }
 
 // Step processes one incoming message.
